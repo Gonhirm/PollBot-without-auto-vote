@@ -5,9 +5,9 @@ const client = new Client({
     intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent],
 });
 
-const POLL_MANAGEMENT_CHANNEL_ID = '1318327808514195556'; // ID du salon poll-management
-let suggestChannelID = null; // ID du salon pour suggestions automatiques
-const suggestions = {}; // Stocke les suggestions avec l'auteur
+const POLL_MANAGEMENT_CHANNEL_ID = '1318327808514195556'; // Salon d'interface de commandes
+let suggestChannelID = null; // Salon pour suggestions automatiques
+const suggestions = {}; // Stocke les suggestions avec auteur
 const votes = {}; // Stocke les votes
 
 let suggestionTimer = null;
@@ -25,9 +25,15 @@ function isPollManagementChannel(message) {
     return message.channel.id === POLL_MANAGEMENT_CHANNEL_ID;
 }
 
-// Fonction pour afficher un timer toutes les 1/10e du temps dans le canal défini
+// Fonction pour afficher un timer toutes les 1/10e du temps défini
 function displayCountdown(channel, endTime, duration, message) {
-    const intervalTime = duration / 10;
+    let intervalTime;
+
+    if (duration > 50 * 60 * 1000) { // Si temps > 50 minutes
+        intervalTime = duration / 10;
+    } else { // Si temps <= 50 minutes
+        intervalTime = duration * 0.1;
+    }
 
     const interval = setInterval(() => {
         const timeLeft = Math.max(0, endTime - Date.now());
@@ -44,6 +50,23 @@ function displayCountdown(channel, endTime, duration, message) {
 
     return interval;
 }
+
+// Fonction Auto-suggestions
+client.on('messageCreate', (message) => {
+    if (message.author.bot || !suggestChannelID) return;
+
+    if (message.channel.id === suggestChannelID) {
+        const suggestion = message.content.trim();
+        if (!suggestion) return;
+
+        if (Object.values(suggestions).includes(suggestion)) {
+            return message.reply('❌ This suggestion already exists.');
+        }
+
+        suggestions[suggestion] = message.author.id;
+        message.reply(`✅ Your suggestion has been added: **${suggestion}**`);
+    }
+});
 
 // Commande pour définir le salon des suggestions automatiques
 client.on('messageCreate', (message) => {
@@ -81,6 +104,7 @@ client.on('messageCreate', (message) => {
             duration,
             '⏰ Suggestion period has ended.'
         );
+
         suggestionTimer = setTimeout(() => {
             clearInterval(suggestionInterval);
             suggestChannel.send('⏰ Suggestion period is over.');
@@ -146,122 +170,6 @@ client.on('messageCreate', (message) => {
             isVotingActive = false;
             suggestChannel.send('⏰ Voting period is over. Use `!results` to see the results.');
         }, duration);
-    }
-});
-
-// Commande pour stopper une période de votes
-client.on('messageCreate', (message) => {
-    if (!isPollManagementChannel(message)) return;
-
-    if (message.content === '!stop-voting') {
-        clearTimeout(votingTimer);
-        clearInterval(votingInterval);
-        votingEndTime = null;
-        isVotingActive = false;
-        message.reply('🛑 Voting period has been stopped.');
-    }
-});
-
-// Commande combinée pour suggestions + votes
-client.on('messageCreate', (message) => {
-    if (!isPollManagementChannel(message)) return;
-
-    if (message.content.startsWith('!start-suggestions-voting')) {
-        if (!suggestChannelID) {
-            return message.reply('❌ You must first set a suggestion channel using `!set-suggest-channel`.');
-        }
-
-        const args = message.content.split(' ').slice(1);
-        const durationSuggestions = parseTime(args[0]);
-        const durationVoting = parseTime(args[1]);
-
-        if (!durationSuggestions || !durationVoting) {
-            return message.reply('❌ Invalid time format. Use `xxdxxhxxm` for both durations.');
-        }
-
-        const suggestChannel = client.channels.cache.get(suggestChannelID);
-
-        isCombinedActive = true;
-
-        // Démarre la période de suggestions
-        suggestChannel.send(`🕒 Starting suggestion period for ${args[0]}...`);
-        suggestionEndTime = Date.now() + durationSuggestions;
-
-        suggestionInterval = displayCountdown(
-            suggestChannel,
-            suggestionEndTime,
-            durationSuggestions,
-            '⏰ Suggestion period has ended. Starting voting period...'
-        );
-
-        suggestionTimer = setTimeout(() => {
-            if (!isCombinedActive) return;
-
-            clearInterval(suggestionInterval);
-            suggestChannel.send('⏰ Suggestion period is over. Starting voting...');
-
-            // Démarre la période de votes
-            votingEndTime = Date.now() + durationVoting;
-            isVotingActive = true;
-
-            const rows = [];
-            Object.keys(suggestions).forEach((suggestion, index) => {
-                rows.push(
-                    new ActionRowBuilder().addComponents(
-                        new ButtonBuilder()
-                            .setCustomId(`vote_${index}`)
-                            .setLabel(suggestion)
-                            .setStyle(ButtonStyle.Primary)
-                    )
-                );
-            });
-
-            suggestChannel.send({
-                content: '🗳 **Voting has started!** Vote for a suggestion below:',
-                components: rows,
-            });
-
-            votingInterval = displayCountdown(
-                suggestChannel,
-                votingEndTime,
-                durationVoting,
-                '⏰ Voting period has ended. Use `!results` to see the results.'
-            );
-
-            votingTimer = setTimeout(() => {
-                if (!isCombinedActive) return;
-
-                clearInterval(votingInterval);
-                isVotingActive = false;
-                suggestChannel.send('⏰ Voting period is over. Use `!results` to see the results.');
-                isCombinedActive = false;
-            }, durationVoting);
-        }, durationSuggestions);
-    }
-});
-
-// Commande pour stopper la période combinée suggestions + votes
-client.on('messageCreate', (message) => {
-    if (!isPollManagementChannel(message)) return;
-
-    if (message.content === '!stop-suggestions-voting') {
-        if (!isCombinedActive) {
-            return message.reply('❌ There is no active combined session to stop.');
-        }
-
-        clearTimeout(suggestionTimer);
-        clearTimeout(votingTimer);
-        clearInterval(suggestionInterval);
-        clearInterval(votingInterval);
-
-        suggestionTimer = null;
-        votingTimer = null;
-        suggestionInterval = null;
-        votingInterval = null;
-        isVotingActive = false;
-        isCombinedActive = false;
-
-        message.reply('🛑 Combined suggestions and voting session has been stopped.');
     }
 });
 
