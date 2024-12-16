@@ -25,7 +25,7 @@ function isPollManagementChannel(message) {
     return message.channel.id === POLL_MANAGEMENT_CHANNEL_ID;
 }
 
-// Fonction pour afficher un timer toutes les 1/10e du temps
+// Fonction pour afficher un timer toutes les 1/10e du temps dans le canal de suggestions
 function displayCountdown(channel, endTime, duration, message) {
     const intervalTime = duration / 10;
 
@@ -63,6 +63,10 @@ client.on('messageCreate', (message) => {
     if (!isPollManagementChannel(message)) return;
 
     if (message.content.startsWith('!start-suggestions-voting')) {
+        if (!suggestChannelID) {
+            return message.reply('❌ You must first set a suggestion channel using `!set-suggest-channel`.');
+        }
+
         const args = message.content.split(' ').slice(1);
         const durationSuggestions = parseTime(args[0]);
         const durationVoting = parseTime(args[1]);
@@ -71,14 +75,16 @@ client.on('messageCreate', (message) => {
             return message.reply('❌ Invalid time format. Use `xxdxxhxxm` for both durations.');
         }
 
+        const suggestChannel = client.channels.cache.get(suggestChannelID);
+
         isCombinedActive = true; // Active l'état combiné
 
         // Démarre la période de suggestions
-        message.reply(`🕒 Starting suggestion period for ${args[0]}...`);
+        suggestChannel.send(`🕒 Starting suggestion period for ${args[0]}...`);
         suggestionEndTime = Date.now() + durationSuggestions;
 
         suggestionInterval = displayCountdown(
-            message.channel,
+            suggestChannel,
             suggestionEndTime,
             durationSuggestions,
             '⏰ Suggestion period has ended. Starting voting period...'
@@ -88,7 +94,7 @@ client.on('messageCreate', (message) => {
             if (!isCombinedActive) return; // Stop si reset
 
             clearInterval(suggestionInterval);
-            message.channel.send('⏰ Suggestion period is over. Starting voting...');
+            suggestChannel.send('⏰ Suggestion period is over. Starting voting...');
 
             // Démarre automatiquement la période de votes
             votingEndTime = Date.now() + durationVoting;
@@ -106,13 +112,13 @@ client.on('messageCreate', (message) => {
                 );
             });
 
-            message.channel.send({
+            suggestChannel.send({
                 content: '🗳 **Voting has started!** Vote for a suggestion below:',
                 components: rows,
             });
 
             votingInterval = displayCountdown(
-                message.channel,
+                suggestChannel,
                 votingEndTime,
                 durationVoting,
                 '⏰ Voting period has ended. Use `!results` to see the results.'
@@ -122,72 +128,42 @@ client.on('messageCreate', (message) => {
                 if (!isCombinedActive) return; // Stop si reset
                 clearInterval(votingInterval);
                 isVotingActive = false;
-                message.channel.send('⏰ Voting period is over. Use `!results` to see the results.');
+                suggestChannel.send('⏰ Voting period is over. Use `!results` to see the results.');
                 isCombinedActive = false; // Désactive l'état combiné
             }, durationVoting);
         }, durationSuggestions);
     }
 });
 
-// Commande pour stopper la période combinée suggestions + votes
+// Commande pour afficher les résultats dans le canal de suggestions
 client.on('messageCreate', (message) => {
     if (!isPollManagementChannel(message)) return;
 
-    if (message.content === '!stop-suggestions-voting') {
-        if (!isCombinedActive) {
-            return message.reply('❌ There is no active combined session to stop.');
+    if (message.content === '!results') {
+        if (!suggestChannelID) {
+            return message.reply('❌ You must first set a suggestion channel using `!set-suggest-channel`.');
         }
 
-        clearTimeout(suggestionTimer);
-        clearTimeout(votingTimer);
-        clearInterval(suggestionInterval);
-        clearInterval(votingInterval);
+        const suggestChannel = client.channels.cache.get(suggestChannelID);
 
-        suggestionTimer = null;
-        votingTimer = null;
-        suggestionInterval = null;
-        votingInterval = null;
-        isVotingActive = false;
-        isCombinedActive = false;
+        if (Object.keys(votes).length === 0) {
+            return suggestChannel.send('❌ No votes have been recorded.');
+        }
 
-        message.reply('🛑 Combined suggestions and voting session has been stopped.');
-    }
-});
+        const voteCounts = {};
+        Object.values(votes).forEach((voteList) => {
+            voteList.forEach((vote) => {
+                if (!voteCounts[vote]) voteCounts[vote] = 0;
+                voteCounts[vote]++;
+            });
+        });
 
-// Commande pour suggestions classiques
-client.on('messageCreate', (message) => {
-    if (message.channel.id === suggestChannelID && !isVotingActive && !message.author.bot) {
-        const suggestion = message.content.trim();
-        if (!suggestion) return;
+        let resultsMessage = '🏆 **Poll Results** 🗳\n\n';
+        Object.entries(voteCounts).forEach(([suggestion, count]) => {
+            resultsMessage += `- **${suggestion}** : ${count} vote(s)\n`;
+        });
 
-        suggestions[suggestion] = message.author.id;
-        message.reply(`✅ Suggestion added: "${suggestion}"`);
-    }
-});
-
-// Commande pour reset toutes les données
-client.on('messageCreate', (message) => {
-    if (message.content === '!reset') {
-        // Arrête tous les timers et intervalles
-        clearTimeout(suggestionTimer);
-        clearTimeout(votingTimer);
-        clearInterval(suggestionInterval);
-        clearInterval(votingInterval);
-
-        Object.keys(suggestions).forEach((key) => delete suggestions[key]);
-        Object.keys(votes).forEach((key) => delete votes[key]);
-
-        suggestionTimer = null;
-        votingTimer = null;
-        suggestionInterval = null;
-        votingInterval = null;
-
-        suggestionEndTime = null;
-        votingEndTime = null;
-        isVotingActive = false;
-        isCombinedActive = false;
-
-        message.reply('🛑 All functions have been stopped, and all data has been reset.');
+        suggestChannel.send(resultsMessage);
     }
 });
 
