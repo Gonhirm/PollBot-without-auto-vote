@@ -25,7 +25,7 @@ function isPollManagementChannel(message) {
     return message.channel.id === POLL_MANAGEMENT_CHANNEL_ID;
 }
 
-// Fonction pour afficher un timer toutes les 1/10e du temps
+// Fonction pour afficher un timer toutes les 1/10e du temps dans le canal défini
 function displayCountdown(channel, endTime, duration, message) {
     const intervalTime = duration / 10;
 
@@ -58,11 +58,119 @@ client.on('messageCreate', (message) => {
     }
 });
 
+// Commande pour démarrer une période de suggestions
+client.on('messageCreate', (message) => {
+    if (!isPollManagementChannel(message)) return;
+
+    if (message.content.startsWith('!start-suggestions')) {
+        if (!suggestChannelID) {
+            return message.reply('❌ You must first set a suggestion channel using `!set-suggest-channel`.');
+        }
+
+        const duration = parseTime(message.content.split(' ')[1]);
+        if (!duration) return message.reply('❌ Invalid time format. Use `xxdxxhxxm`.');
+
+        const suggestChannel = client.channels.cache.get(suggestChannelID);
+
+        suggestionEndTime = Date.now() + duration;
+        suggestChannel.send(`🕒 Suggestion period started for ${message.content.split(' ')[1]}.`);
+
+        suggestionInterval = displayCountdown(
+            suggestChannel,
+            suggestionEndTime,
+            duration,
+            '⏰ Suggestion period has ended.'
+        );
+        suggestionTimer = setTimeout(() => {
+            clearInterval(suggestionInterval);
+            suggestChannel.send('⏰ Suggestion period is over.');
+        }, duration);
+    }
+});
+
+// Commande pour stopper une période de suggestions
+client.on('messageCreate', (message) => {
+    if (!isPollManagementChannel(message)) return;
+
+    if (message.content === '!stop-suggestions') {
+        clearTimeout(suggestionTimer);
+        clearInterval(suggestionInterval);
+        suggestionEndTime = null;
+        message.reply('🛑 Suggestion period has been stopped.');
+    }
+});
+
+// Commande pour démarrer une période de votes
+client.on('messageCreate', (message) => {
+    if (!isPollManagementChannel(message)) return;
+
+    if (message.content.startsWith('!start-voting')) {
+        if (!suggestChannelID) {
+            return message.reply('❌ You must first set a suggestion channel using `!set-suggest-channel`.');
+        }
+
+        const duration = parseTime(message.content.split(' ')[1]);
+        if (!duration) return message.reply('❌ Invalid time format. Use `xxdxxhxxm`.');
+
+        const suggestChannel = client.channels.cache.get(suggestChannelID);
+
+        votingEndTime = Date.now() + duration;
+        isVotingActive = true;
+
+        const rows = [];
+        Object.keys(suggestions).forEach((suggestion, index) => {
+            rows.push(
+                new ActionRowBuilder().addComponents(
+                    new ButtonBuilder()
+                        .setCustomId(`vote_${index}`)
+                        .setLabel(suggestion)
+                        .setStyle(ButtonStyle.Primary)
+                )
+            );
+        });
+
+        suggestChannel.send({
+            content: '🗳 **Voting has started!** Vote for a suggestion below:',
+            components: rows,
+        });
+
+        votingInterval = displayCountdown(
+            suggestChannel,
+            votingEndTime,
+            duration,
+            '⏰ Voting period has ended. Use `!results` to see the results.'
+        );
+
+        votingTimer = setTimeout(() => {
+            clearInterval(votingInterval);
+            isVotingActive = false;
+            suggestChannel.send('⏰ Voting period is over. Use `!results` to see the results.');
+        }, duration);
+    }
+});
+
+// Commande pour stopper une période de votes
+client.on('messageCreate', (message) => {
+    if (!isPollManagementChannel(message)) return;
+
+    if (message.content === '!stop-voting') {
+        clearTimeout(votingTimer);
+        clearInterval(votingInterval);
+        votingEndTime = null;
+        isVotingActive = false;
+        message.reply('🛑 Voting period has been stopped.');
+    }
+});
+
 // Commande combinée pour suggestions + votes
 client.on('messageCreate', (message) => {
     if (!isPollManagementChannel(message)) return;
 
     if (message.content.startsWith('!start-suggestions-voting')) {
+        if (!suggestChannelID) {
+            return message.reply('❌ You must first set a suggestion channel using `!set-suggest-channel`.');
+        }
+
         const args = message.content.split(' ').slice(1);
         const durationSuggestions = parseTime(args[0]);
         const durationVoting = parseTime(args[1]);
@@ -71,26 +179,28 @@ client.on('messageCreate', (message) => {
             return message.reply('❌ Invalid time format. Use `xxdxxhxxm` for both durations.');
         }
 
-        isCombinedActive = true; // Active l'état combiné
+        const suggestChannel = client.channels.cache.get(suggestChannelID);
+
+        isCombinedActive = true;
 
         // Démarre la période de suggestions
-        message.reply(`🕒 Starting suggestion period for ${args[0]}...`);
+        suggestChannel.send(`🕒 Starting suggestion period for ${args[0]}...`);
         suggestionEndTime = Date.now() + durationSuggestions;
 
         suggestionInterval = displayCountdown(
-            message.channel,
+            suggestChannel,
             suggestionEndTime,
             durationSuggestions,
             '⏰ Suggestion period has ended. Starting voting period...'
         );
 
         suggestionTimer = setTimeout(() => {
-            if (!isCombinedActive) return; // Stop si reset
+            if (!isCombinedActive) return;
 
             clearInterval(suggestionInterval);
-            message.channel.send('⏰ Suggestion period is over. Starting voting...');
+            suggestChannel.send('⏰ Suggestion period is over. Starting voting...');
 
-            // Démarre automatiquement la période de votes
+            // Démarre la période de votes
             votingEndTime = Date.now() + durationVoting;
             isVotingActive = true;
 
@@ -106,24 +216,25 @@ client.on('messageCreate', (message) => {
                 );
             });
 
-            message.channel.send({
+            suggestChannel.send({
                 content: '🗳 **Voting has started!** Vote for a suggestion below:',
                 components: rows,
             });
 
             votingInterval = displayCountdown(
-                message.channel,
+                suggestChannel,
                 votingEndTime,
                 durationVoting,
                 '⏰ Voting period has ended. Use `!results` to see the results.'
             );
 
             votingTimer = setTimeout(() => {
-                if (!isCombinedActive) return; // Stop si reset
+                if (!isCombinedActive) return;
+
                 clearInterval(votingInterval);
                 isVotingActive = false;
-                message.channel.send('⏰ Voting period is over. Use `!results` to see the results.');
-                isCombinedActive = false; // Désactive l'état combiné
+                suggestChannel.send('⏰ Voting period is over. Use `!results` to see the results.');
+                isCombinedActive = false;
             }, durationVoting);
         }, durationSuggestions);
     }
@@ -154,21 +265,41 @@ client.on('messageCreate', (message) => {
     }
 });
 
-// Commande pour suggestions classiques
+// Commande pour afficher les résultats
 client.on('messageCreate', (message) => {
-    if (message.channel.id === suggestChannelID && !isVotingActive && !message.author.bot) {
-        const suggestion = message.content.trim();
-        if (!suggestion) return;
+    if (!isPollManagementChannel(message)) return;
 
-        suggestions[suggestion] = message.author.id;
-        message.reply(`✅ Suggestion added: "${suggestion}"`);
+    if (message.content === '!results') {
+        if (!suggestChannelID) {
+            return message.reply('❌ You must first set a suggestion channel using `!set-suggest-channel`.');
+        }
+
+        const suggestChannel = client.channels.cache.get(suggestChannelID);
+
+        if (Object.keys(votes).length === 0) {
+            return suggestChannel.send('❌ No votes have been recorded.');
+        }
+
+        const voteCounts = {};
+        Object.values(votes).forEach((voteList) => {
+            voteList.forEach((vote) => {
+                if (!voteCounts[vote]) voteCounts[vote] = 0;
+                voteCounts[vote]++;
+            });
+        });
+
+        let resultsMessage = '🏆 **Poll Results** 🗳\n\n';
+        Object.entries(voteCounts).forEach(([suggestion, count]) => {
+            resultsMessage += `- **${suggestion}** : ${count} vote(s)\n`;
+        });
+
+        suggestChannel.send(resultsMessage);
     }
 });
 
-// Commande pour reset toutes les données
+// Commande pour réinitialiser toutes les données
 client.on('messageCreate', (message) => {
     if (message.content === '!reset') {
-        // Arrête tous les timers et intervalles
         clearTimeout(suggestionTimer);
         clearTimeout(votingTimer);
         clearInterval(suggestionInterval);
