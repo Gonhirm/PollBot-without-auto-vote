@@ -11,6 +11,11 @@ const { REST, Routes } = require('discord.js');
 const CLIENT_ID = '1317953766074486784'; // ID de votre bot
 const TOKEN = process.env.TOKEN; // Votre token Discord
 
+if (!CLIENT_ID || !TOKEN) {
+    console.error("❌ CLIENT_ID or TOKEN is missing. Ensure they are set in the environment variables.");
+    process.exit(1); // Exit the process if critical data is missing
+}
+
 const commands = [
     {
         name: 'start-voting-predefined',
@@ -58,7 +63,10 @@ const rest = new REST({ version: '10' }).setToken(TOKEN);
 
         console.log('✅ Successfully reloaded application (global) commands.');
     } catch (error) {
-        console.error('❌ Failed to reload application commands:', error);
+        console.error('❌ Failed to reload application commands. Error:', error.code || 'Unknown code', error.message || 'No message provided');
+        if (error.response?.data) {
+            console.error('📋 Response Data:', JSON.stringify(error.response.data, null, 2));
+        }
     }
 })();
 
@@ -144,9 +152,10 @@ client.on('interactionCreate', async (interaction) => {
 
     if (commandName === 'set-suggest-channel') {
         const channel = options.getChannel('channel');
-        if (channel.type !== 0) {
+        if (channel.type !== ChannelType.GuildText) {
             return interaction.reply({ content: '❌ The channel must be a text channel.', ephemeral: true });
         }
+        
 
         suggestChannelID = channel.id;
         interaction.reply({ content: `✅ Suggestions will now be automatically collected in <#${channel.id}>.` });
@@ -161,11 +170,18 @@ const activeTimers = {}; // Gestion des timers (suggestions, votes)
 
 // Gestion centralisée des fichiers
 function loadFileSync(filename, defaultData = {}) {
-    if (!fs.existsSync(filename)) {
-        console.log(`⚠️ ${filename} not found. A new one will be created on save.`);
+    try {
+        if (!fs.existsSync(filename)) {
+            console.log(`⚠️ ${filename} not found. Creating a new one.`);
+            fs.writeFileSync(filename, JSON.stringify(defaultData, null, 2));
+            return defaultData;
+        }
+        return JSON.parse(fs.readFileSync(filename));
+    } catch (error) {
+        console.error(`❌ Error reading or parsing ${filename}:`, error.message);
+        console.log(`⚠️ Resetting ${filename} to default data.`);
         return defaultData;
     }
-    return JSON.parse(fs.readFileSync(filename));
 }
 
 function saveFileSync(filename, data) {
